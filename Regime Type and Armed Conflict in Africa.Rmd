@@ -1,0 +1,1025 @@
+---
+title: "Armed Conflict and Regime Type in Africa"
+author: "Sam Kane Jiménez"
+date: "2/25/2020"
+output: html_document
+---
+
+
+```{r, echo = TRUE, warning = FALSE, fig.height = 4}
+rm(list=(ls()))
+
+library(knitr) #allows you to "knit" this Rmd file into a report
+library(foreign) #functions: read.spss
+library(descr) #functions: freq, crosstab
+library(ggplot2) #functions: ggplot
+library(ggstance)
+library(ggthemes) #more themes for ggplots
+library(carData) #functions: scatterplot
+library(dplyr) #functions: left_join, group_by, summarise
+library(nnet) #functions: multinom
+library(MASS) #functions: polr, glm.nb
+library(margins) #Functions: margins
+library(AER) #Functions: coeftest
+library(effects) #Functions: allEffects, Effects
+library(nlme) #Functions: lme & intervals
+library(lme4) #Functions: lmer
+library(ordinal) #Functions: clmm, clmm2
+library(sjstats) #Functions: icc
+library(readxl) #allows you to read Excel files
+library(Matrix) #Necessary for sjstats
+library(tidyr) #Cleans up and sorts data
+library(multiwayvcov) #Adjusts standard errors for multilevel models
+library(stargazer)
+library(jtools)
+library(kableExtra)
+library(ggpubr)
+library(tinytex)
+library(tidyverse)
+library(WDI) #Helps clean WDI data
+library(zoo)
+library(sjPlot)
+library(stats)
+library(boot) #for GLM diagnostic plots
+library(visreg) #for regression visualizations
+```
+
+# Loading in Datasets
+
+## V Dem
+
+1. Read in V-Dem.
+2. Confine V-Dem Africa to conflict-related indicators (`vdem3`).
+3. Subset V-Dem to African observations (`vdem2`). Save as CSV.
+4. To read in this finalized VDem for African Conflict Dataframe, use `read.csv` and trace the new CSV from Step 3 above.
+
+```{r}
+##Step 1
+vdem <- read.csv("V-Dem-CY-Full+Others-v9.csv")
+
+##Step 2
+vdem <- dplyr::select(vdem, "country_name", "country_text_id", "e_regiongeo", "country_text_id", "year", "v2x_regime", "v2x_regime_amb", "e_civil_war", "e_miinterc", "e_migdpgro", "e_migdppc", "v2xeg_eqdr", "v2xeg_eqaccess", "v2pepwrses", "e_total_resources_income_pc", "v2stfisccap", "e_pt_coup", "e_bnr_dem", "v2x_clpol", "v2x_clpriv", "v2x_clphy", "e_ti_cpi", "v2svstterr", "v2regint", "v2regsupgroupssize", "v2xnp_client", "v2xnp_pres", "v2elmulpar", "v2ddyrall", "v2ddcredal", "v3struinvadm", "e_wb_pop")
+
+##Step 3
+vdem <- subset(vdem, e_regiongeo == 5 | e_regiongeo == 6 | e_regiongeo == 7 | e_regiongeo == 8 | e_regiongeo == 9)
+vdem$country_name <- trimws(vdem$country_name, which = c("both"))
+vdem$country_name[vdem$country_name == "Swaziland"] <- "Eswatini"
+vdem$country_name[vdem$country_name == "Ivory Coast"] <- "Cote d'Ivoire"
+names(vdem)[names(vdem) == "country_name"] <- "country"
+vdem$countryyears <- paste((vdem$country), (vdem$year), sep=" ") #create country-years variable
+
+write.csv(vdem, "VDem African Conflict.csv") #Save CSV of VDem-African Conflict
+
+##Step 4
+vdem <- read.csv("VDem African Conflict.csv")
+
+```
+
+## UCDP
+
+1. Read in UCDP.
+2. Separate locations with 2+ countries into multiple observations.
+3. Subset UCDP to African observations (`ucdp2`) and change names to concur with other datasets.
+4. Transform, create, remove variables as needed.
+5. Save as CSV.
+6. To read in this finalized UCDP for African Conflict Dataframe, use `read.csv` and trace the new CSV from Step 4 above.
+
+```{r}
+##Step 1
+ucdp <- read.csv("UCDP Armed Conflict.csv")
+
+##Step 2
+ucdp = separate_rows(ucdp,2,sep = ",")
+ucdp$location <- trimws(ucdp$location, which = c("both"))
+
+##Step 3
+ucdp$region <- trimws(ucdp$region, which = c("both"))
+ucdp <- subset(ucdp, region == 4 | location == "Egypt")
+ucdp$location[ucdp$location == "DR Congo (Zaire)"] <- "Democratic Republic of the Congo"
+ucdp$location[ucdp$location == "Congo"] <- "Republic of the Congo"
+ucdp$location[ucdp$location == "Gambia"] <- "The Gambia"
+ucdp$location[ucdp$location == "Ivory Coast"] <- "Cote d'Ivoire"
+ucdp$location[ucdp$location == "Madagascar (Malagasy)"] <- "Madagascar"
+ucdp$location[ucdp$location == "Zimbabwe (Rhodesia)"] <- "Zimbabwe"
+
+##Step 4 -- Transform, create, remove variables
+
+names(ucdp)[names(ucdp) == "location"] <- "country" #rename location to country
+names(ucdp)[names(ucdp) == "ep_end"] <- "peace" #rename ep_end to peace
+names(ucdp)[names(ucdp) == "intensity_level"] <- "severity"
+names(ucdp)[names(ucdp) == "type_of_conflict"] <- "conflict_type"
+
+namibia <- subset(ucdp, territory_name == "Namibia")
+namibia <- namibia[, -c(2)]
+names(namibia)[names(namibia) == "territory_name"] <- "country"
+namibia$country <- trimws(namibia$country, which = c("both"))
+ucdp$country <- trimws(ucdp$country, which = c("both"))
+ucdp <- full_join(ucdp, namibia)
+
+ucdp$countryyears <- paste((ucdp$country), (ucdp$year), sep=" ") #Create country-year variable
+
+ucdp <- ucdp %>%
+  dplyr::select(country, year, territory_name, countryyears, peace, severity, everything())
+
+ucdp <- separate(ucdp, c("ep_end_date"), into = c("endyear", "endmonth", "endday"), sep="-")
+ucdp$endyear <- as.numeric(ucdp$endyear)
+ucdp <- separate(ucdp, c("start_date"), into = c("startyear", "startmonth", "startday"), sep="-")
+ucdp$startyear  <- as.numeric(ucdp$startyear)
+ucdp$lastconfyear <- ucdp$endyear #copy ucdp$endyear to then transform that variable
+ucdp$lastconfyear[is.na(ucdp$lastconfyear)] <- ucdp$year[is.na(ucdp$lastconfyear)] #where ucdp$peace = 0 (i.e., ucdp$lastconfyear = is.na), ucdp$lastconfyear = observation year -- DO THIS BEFORE MERGING SO ALL YEARS DON'T COPY ONTO THIS NEW VARIABLE, JUST THE YEARS WHERE THERE IS CONFLICT (I.E., OBSERVATION YEARS IN THE UCDP DATASET)
+
+drop <- c("side_a", "side_a_id", "side_a_2nd", "side_b", "start_date", "start_date2", "ep_end_date", "endmonth", "endday", "startmonth", "startday", "side_b_id", "side_b_2nd", "territory_name", "start_prec", "start_prec2", "ep_end_prec", "gwno_a", "gwno_a_2nd", "gwno_b", "gwno_b_2nd", "gwno_loc", "region", "version") #variables to drop from dataframe
+ucdp = ucdp[,!(names(ucdp) %in% drop)] #drop variables listed above
+
+
+##Step 5
+write.csv(ucdp, "UCDP African Conflict.csv") #Save CSV
+
+##Step 6
+ucdp <- read.csv("UCDP African Conflict.csv") #to read in cleaned dataframe
+
+```
+
+## EPR
+
+1. Read in EPR
+2. Subset EPR to African observations.
+3. Create variables `ethnicgroups` and `powerloss`.
+4. Save as CSV (`EPR-African Conflict`).
+5. To read in this finalized EPR-Africa Dataframe, use `read.csv` and trace the new CSV from Step 4 above.
+
+```{r, warning = FALSE}
+##Step 1
+epr1 <- read.csv("EPR-2019.csv")
+
+##Step 2
+epr1$statename <- trimws(epr1$statename, which = c("both"))
+epr1 <- subset(epr1, statename == "Algeria" | statename == "Angola" | statename == "Benin" | statename == "Botswana" | statename == "Burkina Faso" | statename == "Burundi" | statename == "Cameroon" | statename == "Cape Verde" | statename == "Central African Republic" | statename == "Chad" | statename == "Comoros" | statename == "Congo" | statename == "Congo, DRC" | statename == "Cote d'Ivoire" | statename == "Djibouti" | statename == "Egypt" | statename == "Equatorial Guinea" | statename == "Eritrea" | statename == "Ethiopia" | statename == "Gabon" | statename == "The Gambia" | statename == "Ghana" | statename == "Guinea" | statename == "Guinea-Bissau" | statename == "Kenya" | statename == "Lesotho" | statename == "Liberia" | statename == "Libya (Tripolitania, Cyrenaica, Fezzan)" | statename == "Madagascar" | statename == "Malawi" | statename == "Mali" | statename == "Mauritania" | statename == "Mauritius" | statename == "Morocco" | statename == "Mozambique" | statename == "Namibia" | statename == "Niger" | statename == "Nigeria" | statename == "Rwanda" | statename == "Senegal" | statename == "Sierra Leone" | statename == "Somalia" | statename == "South Africa" | statename == "South Sudan" | statename == "Sudan" | statename == "Swaziland" | statename == "Tanzania" | statename == "Togo" | statename == "Tunisia" | statename == "Uganda" |  statename == "Zambia" | statename == "Zimbabwe") #Sao Tomé, Seychelles not included in dataset
+epr1$statename[epr1$statename == "Swaziland"] <- "Eswatini"
+epr1$statename[epr1$statename == "Libya (Tripolitania, Cyrenaica, Fezzan)"] <- "Libya"
+epr1$statename[epr1$statename == "Congo, DRC"] <- "Democratic Republic of the Congo"
+epr1$statename[epr1$statename == "Congo"] <- "Republic of the Congo"
+epr1$statename[epr1$statename == "Congo, DRC"] <- "Democratic Republic of the Congo"
+names(epr1)[names(epr1) == "statename"] <- "country" #rename country variable
+
+#Step 3 Alternative
+epr1 <- subset(epr1, select=(c("country", "from", "to", "status", "size", "group"))) #just the variables I need
+epr1$countryfrom <- paste((epr1$country), (epr1$from), sep=":") #Join country with from to use as group
+epr1 <- epr1 %>% 
+  group_by(countryfrom) %>% #group by countryfrom so the new years variable is created based on the variable range, not a country's first listed range
+  mutate(year = paste(from:to, collapse = ",") ) %>% 
+  ungroup() %>% 
+  separate_rows(year, sep=",")
+epr1$countryyears <- paste((epr1$country), (epr1$year), sep=":") #Create country-year variable
+epr1 <- epr1 %>%
+  group_by(countryyears) %>%
+  mutate(ethnic_groups = n_distinct(group)) #find the number of ethnic groups in a country in a given year
+#epr2$ethnic_groups <- 9-(rowSums(is.na(epr3))) #create enthic_groups count based on the number of categories
+epr1b <- epr1 %>% 
+  group_by(countryyears, status) %>% 
+  summarise(sum(size))
+names(epr1b)[names(epr1b) == "sum(size)"] <- "size"
+epr2 <- left_join(epr1, epr1b, by=c("countryyears", "status", "size"))
+epr3 <- pivot_wider(epr2, names_from = status, values_from = size) #pivotwider and prevent creation of a list because of duplicates
+epr3 <- epr3[, -c(1:6)] #remove country, year, to, from, countryfrom, group
+epr3b <- epr3[, 1:2] #keep ethnic_groups and countryyears 
+epr3b <- epr3b %>%
+  group_by(countryyears) %>%
+  summarise_all(funs(sum)) #add ethnic group numbers within countryyears (disregard distribution of group numbers by status)
+epr4 <- epr3[, -c(2)] #remove ethnic_groups
+epr4 <- epr4 %>% 
+  group_by(countryyears) %>% 
+  summarise_all(~first(na.omit(.))) #replace NAs with next available value within group and consolidate rows
+epr <- left_join(epr4, epr3b)
+epr$countryyears <- sub(":", " ", epr$countryyears)
+names(epr) <- tolower(names(epr))
+epr[is.na(epr)] <- 0
+
+##Step 4
+write.csv(epr, "EPR African Conflict.csv") #Save CSV of EPR-Africa
+
+##Step 5
+epr <- read.csv("EPR African Conflict.csv") #to read in cleaned dataframe
+
+```
+
+## WDI
+
+1. Create WDI dataframe (make sure the WDI package is installed) with African country codes and macroeconomic indicators (renamed from series code).
+2. Create `wdi$male1529` variable by adding together the percentages of males in the three young adult age categories, and multiplying that sum by the percentage of the population that is male.
+3. Write CSV.
+4. To read in this finalized WDI-African Conflict Dataframe, use `read.csv` and trace the new CSV from Step 4 above.
+
+```{r}
+##Step 1
+wdi <- WDI(country = c("DZA", "AGO", "BEN", "BWA", "BFA", "BDI", "CPV", "CMR", "CAF", "TCD", "COM", "COD", "COG", "CIV", "DJI", "EGY", "GNQ", "ERI", "SWZ", "ETH", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN", "LSO", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MAR", "MOZ", "NAM", "NER", "NGA", "RWA", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SSD", "SDN", "TZA", "TGO", "TUN", "UGA", "ZMB", "ZWE"), indicator = c('accountability' = 'IQ.CPA.TRAN.XQ', 'FDI' = 'BX.KLT.DINV.WD.GD.ZS', 'GINI' = 'SI.POV.GINI', 'PCE' = 'TX.VAL.MMTL.ZS.UN', 'male1519' = 'SP.POP.1519.MA.5Y', 'male2024' = 'SP.POP.2024.MA.5Y', 'male2529' = 'SP.POP.2529.MA.5Y', 'trade' = 'NE.TRD.GNFS.ZS', 'malepop' = 'SP.POP.TOTL.MA.ZS', 'population' = 'SP.POP.TOTL'), start = 1960, end = 2019)
+
+##Step 2
+wdi$male1529 <- (wdi$male1519 + wdi$male2024 + wdi$male2529)*(wdi$malepop/100)
+wdi$country[wdi$country == 'Congo, Dem. Rep.'] <- 'Democratic Republic of the Congo'
+wdi$country[wdi$country == 'Congo, Rep.'] <- 'Republic of the Congo'
+wdi$country[wdi$country == 'Egypt, Arab Rep.'] <- 'Egypt'
+wdi$country[wdi$country == 'Gambia, The'] <- 'The Gambia'
+wdi$countryyears <- paste((wdi$country), (wdi$year), sep=" ") #Create country-year variable
+wdi <- wdi[-c(2631:2581), ] #South Sudan considered as part of dataset since before 2012 -- recency later appears negative, so delete SS before independence in 2011
+#wdi <- subset(wdi, countryyears != "South Sudan 1968" & countryyears != "South Sudan 1969" & countryyears != "South Sudan 1970" & countryyears != "South Sudan 1971" & countryyears != "South Sudan 1972" & countryyears != "South Sudan 1973" & countryyears != "South Sudan 1974" & countryyears != "South Sudan 1975" & countryyears != "South Sudan 1976" & countryyears != "South Sudan 1977" & countryyears != "South Sudan 1978" & countryyears != "South Sudan 1979" & countryyears != "South Sudan 1980" & countryyears != "South Sudan 1981" & countryyears != "South Sudan 1982" & countryyears != "South Sudan 1983" & countryyears != "South Sudan 1984" & countryyears != "South Sudan 1985" & countryyears != "South Sudan 1986" & countryyears != "South Sudan 1987" & countryyears != "South Sudan 1988" & countryyears != "South Sudan 1989" & countryyears != "South Sudan 1990" & countryyears != "South Sudan 1991" & countryyears != "South Sudan 1992" & countryyears != "South Sudan 1993" & countryyears != "South Sudan 1994" & countryyears != "South Sudan 1995" & countryyears != "South Sudan 1996" & countryyears != "South Sudan 1997" & countryyears != "South Sudan 1998" & countryyears != "South Sudan 1999" & countryyears != "South Sudan 2000" & countryyears != "South Sudan 2001" & countryyears != "South Sudan 2002" & countryyears != "South Sudan 2003" & countryyears != "South Sudan 2004" & countryyears != "South Sudan 2005" & countryyears != "South Sudan 2006" & countryyears != "South Sudan 2007" & countryyears != "South Sudan 2008" & countryyears != "South Sudan 2009" & countryyears != "South Sudan 2010")
+drop <- c("male1519", "male2024", "male2529", "malepop") #variables to drop from dataframe
+wdi = wdi[,!(names(wdi) %in% drop)] #drop variables listed above
+
+##Step 3
+write.csv(wdi, "WDI African Conflict.csv") #Save as CSV
+
+##Step 4
+wdi <- read.csv("WDI African Conflict.csv")
+
+```
+
+# Lootable resources
+
+```{r}
+ross <- read.csv("Ross-Mahdavi Oil and Gas 1932-2014.csv")
+
+#Subset to African states
+ross <- subset(ross, id == "DZA"| id == "AGO"| id == "BEN"| id == "BWA"| id == "BFA"| id == "BDI"| id == "CPV"| id == "CMR"| id == "CAF"| id == "TCD"| id == "COM"| id == "COD"| id == "COG"| id == "CIV"| id == "DJI"| id == "EGY"| id == "GNQ"| id == "ERI"| id == "SWZ"| id == "ETH"| id == "GAB"| id == "GMB"| id == "GHA"| id == "GIN"| id == "GNB"| id == "KEN"| id == "LSO"| id == "LBR"| id == "LBY"| id == "MDG"| id == "MWI"| id == "MLI"| id == "MRT"| id == "MUS"| id == "MAR"| id == "MOZ"| id == "NAM"| id == "NER"| id == "NGA"| id == "RWA"| id == "STP"| id == "SEN"| id ==  "SYC"| id == "SLE"| id == "SOM"| id == "ZAF"| id == "SSD"| id == "SDN"| id == "TZA"| id == "TGO"| id == "TUN"| id == "UGA"| id == "ZMB"| id == "ZWE")
+
+#Rename African states for consistency
+ross$cty_name[ross$cty_name == 'Congo, Dem. Rep.'] <- 'Democratic Republic of the Congo'
+ross$cty_name[ross$cty_name == 'Congo, Rep.'] <- 'Republic of the Congo'
+ross$cty_name[ross$cty_name == 'Egypt, Arab Rep.'] <- 'Egypt'
+ross$cty_name[ross$cty_name == 'Gambia, The'] <- 'The Gambia'
+ross$cty_name[ross$cty_name == 'Swaziland'] <- 'Eswatini'
+
+#rename variable
+names(ross)[names(ross) == "cty_name"] <- "country"
+
+#make countryyear variable
+ross$countryyears <- paste((ross$country), (ross$year), sep=" ")
+
+ross <- ross %>% dplyr::select(countryyears, oil_prod32_14)
+
+ross <- ross[!is.na(ross$oil_prod32_14), ]
+
+write.csv(ross, "Ross.csv")
+
+```
+
+# Merge Data Frames & Finish Cleaning AfCon
+
+```{r, warning = FALSE}
+rm(list=(ls()))
+
+vdem <- read.csv("VDem African Conflict.csv")
+vdem <- vdem[,-1]
+ucdp <- read.csv("UCDP African Conflict.csv") #to read in cleaned dataframe
+ucdp <- ucdp[,-1]
+epr <- read.csv("EPR African Conflict.csv") #to read in cleaned dataframe
+epr <- epr[,-1]
+wdi <- read.csv("WDI African Conflict.csv")
+wdi <- wdi[,-1]
+ross <- read.csv("Ross.csv")
+ross <- ross[,-1]
+
+merge1 <- left_join(vdem, wdi, by=c("countryyears", "country", "year"))
+merge2 <- left_join(ucdp, epr, by=c("countryyears"))
+merge3 <- left_join(merge1, ross, by=c("countryyears"))
+afcon <- left_join(merge3, merge2, by=c("countryyears", "country", "year"))
+
+#Rename variables
+names(afcon)[names(afcon) == "v2x_regime"] <- "regime_type"
+names(afcon)[names(afcon) == "v2x_regime_amb"] <- "regime_type_amb"
+names(afcon)[names(afcon) == "e_civil_war"] <- "civilwar"
+names(afcon)[names(afcon) == "e_miinterc"] <- "armed_conflict"
+names(afcon)[names(afcon) == "e_migdpgro"] <- "gdp_growth"
+names(afcon)[names(afcon) == "e_migdppc"] <- "gdp_percap"
+names(afcon)[names(afcon) == "e_migdpgro"] <- "gdp_growth"
+names(afcon)[names(afcon) == "v2xeg_eqdr"] <- "resource_inequality"
+names(afcon)[names(afcon) == "v2xeg_eqaccess"] <- "power_inequality"
+names(afcon)[names(afcon) == "v2pepwrses"] <- "political_power_distribution"
+names(afcon)[names(afcon) == "e_total_resources_income_pc"] <- "natural_resource_wealth"
+names(afcon)[names(afcon) == "v2stfisccap"] <- "state_revenue_source"
+names(afcon)[names(afcon) == "e_pt_coup"] <- "coup"
+names(afcon)[names(afcon) == "v2stfisccap"] <- "state_revenue_source"
+names(afcon)[names(afcon) == "e_bnr_dem"] <- "democratic_breakdown"
+names(afcon)[names(afcon) == "v2x_clpol"] <- "political_rights"
+names(afcon)[names(afcon) == "v2x_clpriv"] <- "personal_rights"
+names(afcon)[names(afcon) == "v2x_clphy"] <- "physical_integrity"
+names(afcon)[names(afcon) == "v2x_clpriv"] <- "personal_rights"
+names(afcon)[names(afcon) == "e_ti_cpi"] <- "cpi"
+names(afcon)[names(afcon) == "v2svstterr"] <- "territory_control"
+names(afcon)[names(afcon) == "v2regint"] <- "regime_interregnum"
+names(afcon)[names(afcon) == "v2regsupgroupssize"] <- "winning_coalition"
+names(afcon)[names(afcon) == "v2xnp_client"] <- "clientelism"
+names(afcon)[names(afcon) == "v2xnp_pres"] <- "presidentialism"
+names(afcon)[names(afcon) == "v2elmulpar"] <- "multiparty_elections"
+names(afcon)[names(afcon) == "v2ddyrall"] <- "elections_number"
+names(afcon)[names(afcon) == "v2ddcredal"] <- "election_credibility"
+names(afcon)[names(afcon) == "v3struinvadm"] <- "elite_intervention"
+names(afcon)[names(afcon) == "oil_prod32_14"] <- "oil"
+
+#Peace Variable
+afcon$peace[is.na(afcon$peace)] <- 1 #Populate peace NAs with 1's, meaning it's a year of peace - where 0 is no (conflict) and 1 is yes (no conflict)
+afcon <- within(afcon, peace[peace == '1' & severity == '1' | severity == "2"] <- '0') #where there is severity, there is conflict, therefore change peace to 0
+afcon$peace <- as.numeric(afcon$peace)
+
+afcon <- within(afcon, peace[countryyears == "Eritrea 1966"] <- '0') #separatist conflict from Ethiopia
+afcon <- within(afcon, peace[countryyears == "Zimbabwe 1964"] <- '0') #Rhodesian Bush War
+afcon <- within(afcon, lastconfyear[countryyears == "Eritrea 1966"] <- '0') #separatist conflict from Ethiopia
+afcon <- within(afcon, lastconfyear[countryyears == "Rwanda 1960"] <- '0') #Parmehutu uprising vs. Tutsis
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1952"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1953"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1954"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1955"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1956"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1957"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1958"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1959"] <- '0') #Mau Mau Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Kenya 1960"] <- '0') #Mau Mau Uprising, Independence
+afcon <- within(afcon, lastconfyear[countryyears == "Madagascar 1945"] <- '0') #Malagasy Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Madagascar 1946"] <- '0') #Malagasy Uprising
+afcon <- within(afcon, lastconfyear[countryyears == "Madagascar 1947"] <- '0') #Malagasy Uprising
+
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, severity, lastconfyear, startyear, endyear, dplyr::everything())
+
+#Severity Variable
+afcon$severity[is.na(afcon$severity)] <- 0 #Populate severity NAs with 0's, meaning it's a year of peace and there is no conflict therefore no severity
+afcon$severity <- as.factor(afcon$severity)
+
+#Duration Variable
+duration <- subset(afcon, peace == 1) #subset to only years without conflict
+duration <- dplyr::select(duration, "countryyears", "year", "peace") #keep only year and peace variables for simplicity
+duration$lastpeaceyear <- duration$year #copy year
+afcon <- left_join(afcon, duration, by=c("countryyears", "year", "peace")) #merge with afcon, now lastpeaceyear has is coded for years without conflict
+
+afcon <- afcon %>%
+  group_by(country) %>%
+  fill(lastpeaceyear, .direction="down") #fill lastpeaceyear NAs with last known value for that country group
+afcon <- within(afcon, lastpeaceyear[country == "South Sudan"] <- 1982) #South Sudan - last peace year = 1982, based on Sudan
+afcon <- within(afcon, lastpeaceyear[countryyears == "Cameroon 1961"] <- 1955) #Cameroon's war of independence started in 1955
+
+afcon$duration <- afcon$year - afcon$lastpeaceyear
+
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, lastpeaceyear, lastconfyear, startyear, endyear, duration, dplyr::everything())
+
+#Recency Variable
+afcon<- afcon %>% group_by(country) %>% #Address non-conflict year NAs for afcon$lastconfyear by populating with na.locf function grouped by country
+  fill(lastconfyear, .direction="down") %>% ungroup(country) #fill lastconfyear NAs with last known value within that country
+afcon$lastconfyear[afcon$lastconfyear == "0"] <- NA
+afcon$lastconfyear <- as.numeric(afcon$lastconfyear)
+afcon$recency <- afcon$year-afcon$lastconfyear
+
+#Relapse Variable
+afcon <- afcon %>%
+    group_by(country) %>%
+    mutate(peacelag = dplyr::lag(peace, n = 1, default = NA))
+afcon<- afcon %>% group_by(country) %>% 
+  fill(peacelag, .direction="up") %>% ungroup(country) #to fill the first peacelag row for each country with the pattern below
+afcon["relapse"] <- NA #create relapse column
+afcon <- within(afcon, relapse[peace == 0 & peacelag == 1] <- 'relapse')
+afcon <- within(afcon, relapse[peace == 0 & peacelag == 0] <- 'ongoing')
+afcon <- within(afcon, relapse[peace == 1 & peacelag == 1] <- 'no relapse')
+afcon <- within(afcon, relapse[peace == 1 & peacelag == 0] <- 'no relapse')
+afcon$relapse <- as.factor(afcon$relapse)
+
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, peacelag, severity, duration, relapse, lastpeaceyear, lastconfyear, recency, startyear, endyear, dplyr::everything())
+
+#Regime Change Variable
+#Fill Mozambique missing regime types as semi-authoritarian
+afcon$regime_type[is.na(afcon$regime_type)] <- 1
+afcon$regime_type_amb[is.na(afcon$regime_type_amb)] <- 3
+
+afcon <- afcon %>%
+    group_by(country) %>%
+    mutate(regime_type_lag = dplyr::lag(regime_type_amb, n = 1, default = NA))
+afcon$regime_changed <- afcon$regime_type_amb - afcon$regime_type_lag
+afcon <- within(afcon, regime_changed[countryyears == "South Sudan 2011"] <- '-1') #change from Sudan (=1 in 2010) to South Sudan 2011
+afcon <- within(afcon, regime_changed[countryyears == "Cameroon 1961"] <- '0') #maintain pattern, remove NA
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, severity, duration, relapse, lastpeaceyear, lastconfyear, recency, startyear, endyear, regime_type, regime_type_amb, regime_type_lag, regime_changed, dplyr::everything())
+
+#Drop unnecessary variables
+drop <- c("X", "X.x", "e_regiongeo", "e_wb_pop", "X.y", "iso2c", "country.x", "country.y", "year.x", "year.y", "peacelag", "regime_type_lag") #variables to drop from dataframe
+afcon = afcon[,!(names(afcon) %in% drop)] #drop variables listed above
+
+#Move variables to front of database
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, severity, duration, relapse, recency, lastpeaceyear, lastconfyear, startyear, endyear, regime_type, regime_type_amb, dplyr::everything())
+
+#subset to 1960+
+afcon <- subset(afcon, year >= 1960)
+
+#drop all objects except AfCon
+rm(list=(ls()[ls()!="afcon"]))
+
+#remove rows with too many missing values
+afcon <- subset(afcon, countryyears != "Cameroon 1960" & country != "Somaliland" & country != "Cabo Verde" & year != "2019" & year != "2018" & year != "2017" & country != "Cape Verde")
+afcon <- afcon[!(afcon$country=="Angola" & afcon$year<=1974),]
+
+#Fill Eritrea population and male1529 NAs with last known value
+afcon <- afcon %>%
+  group_by(country) %>%
+  fill(population, .direction="down") #fill population NAs with last known value for that country group
+afcon <- afcon %>%
+  group_by(country) %>%
+  fill(male1529, .direction="down") #fill population NAs with last known value for that country group
+
+#Fill NAs in coups variable with 0 (no coup)
+afcon$coup[is.na(afcon$coup)] <- 0
+
+
+#Make variables correct type:
+afcon$peace <- as.factor(afcon$peace) #factor with two levels (0s and)
+afcon$severity <- factor(afcon$severity, order = TRUE,
+                   levels = c("0", "1", "2")) #ordinal: 0 = no war, 1 = minor conflict, 2 = war
+afcon$duration <- as.numeric(afcon$duration) #continuous numeric
+#afcon$relapse <- factor(afcon$relapse, order = TRUE, levels = c("0", "1", "2")) #0 = ongoing, 1 = relapse, 2 = no relapse
+afcon$relapse <- relevel(afcon$relapse, "ongoing")
+afcon$regime_changed <- as.numeric(afcon$regime_changed)
+afcon$regime_type_factor <- as.factor(afcon$regime_type)
+afcon$regime_type_amb_factor <- factor(afcon$regime_type_amb, order = TRUE,
+                   levels = c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) #ordinal autocracy to democracy, 10 levels
+afcon$oil <- as.numeric(as.character(afcon$oil))
+#copy regime_changed
+afcon <- afcon %>%
+    group_by(country) %>%
+    mutate(regime_will_change = dplyr::lead(regime_changed, n = 1, default = NA))
+
+afcon <- afcon %>%
+  dplyr::select(country, year, countryyears, peace, severity, duration, relapse, recency, lastpeaceyear, lastconfyear, startyear, endyear, regime_type, regime_type_amb, regime_changed, regime_will_change, dplyr::everything())
+
+#write CSV
+write.csv(afcon, "African Conflict Database.csv")
+
+#read CSV
+afcon <- read.csv("African Conflict Database.csv")
+afcon <- afcon[,-1] #reading in the CSV adds a row number variable; this command drops it
+attach(afcon)
+
+```
+# Check variables
+
+## NAs
+
+```{r}
+sum(is.na(lastconfyear)) #1117 NAs
+#countryyears[which(is.na(lastconfyear))]
+sum(is.na(recency)) #1117 NAs
+sum(is.na(gdp_growth)) #321 NAs
+#countryyears[which(is.na(gdp_growth))] #All countries 2017-2018; Somalia - all; Sudan - all; Eritrea - all; Algeria 1961-1970
+sum(is.na(gdp_percap)) #317 NAs
+#countryyears[which(is.na(gdp_percap))] #All countries 2017-2018; Somalia - all; Sudan - all; Eritrea - all; Algeria 1961-1970
+sum(is.na(natural_resource_wealth)) #958 NAs
+#countryyears[which(is.na(natural_resource_wealth))] #every country only has data for after 2007 -- maybe remove
+sum(is.na(state_revenue_source)) #258 NAs
+sum(is.na(accountability)) #2630 NAs
+sum(is.na(cpi)) #2264 NAs
+#countryyears[which(is.na(cpi))]
+sum(is.na(territory_control)) #237 NAs
+sum(is.na(winning_coalition)) #214 NAs
+#countryyears[which(is.na(winning_coalition))] #Burkina Faso 1960-2004, Botswana 1960-1965, Sudan 1960-2004, Tanzania 1960-1990, Uganda 1960-2004, South Africa 1960-1993
+sum(is.na(multiparty_elections)) #2518 NAs
+sum(is.na(elections_number)) #252 NAs
+sum(is.na(election_credibility)) #3025 NAs
+sum(is.na(elite_intervention)) #3183 NAs -- remove var
+sum(is.na(FDI)) #843 NAs
+#countryyears[which(is.na(FDI))]
+sum(is.na(GINI)) #2975 NAs -- remove? I have power and resource inequality already...
+sum(is.na(oil)) #1555 NAs -- make NAs = 0?
+#countryyears[which(is.na(PCE))]
+sum(is.na(trade)) #761 NAs -- make NAs = 0?
+sum(is.na(incompatibility)) #24338 NAs
+sum(is.na(irrelevant)) #2522 NAs
+sum(is.na(powerless)) #2522 NAs
+sum(is.na(dominant)) #2522 NAs
+sum(is.na(junior.partner)) #2522 NAs
+sum(is.na(senior.partner)) #2522 NAs
+sum(is.na(discriminated)) #2522 NAs
+sum(is.na(monopoly)) #2522 NAs
+sum(is.na(state.collapse)) #2522 NAs
+sum(is.na(ethnic_groups)) #2522 NAs
+#countryyears[which(is.na(ethnic_groups))]
+
+```
+
+## Variable Distributions
+
+```{r}
+theme_set(theme_calc(base_size = 14))
+
+ggplot(afcon, aes(peace)) + geom_bar() #binary
+ggplot(afcon, aes(severity)) + geom_bar() #ordinal 0-2
+ggplot(afcon, aes(duration)) + geom_dotplot(binwidth = 0.5) #continuous -- clearly skewed right
+ggplot(afcon, aes(relapse)) + geom_bar() #factor: ongoing/no/yes
+ggplot(afcon, aes(recency)) + geom_density() #numeric; still have 1192 NAs
+ggplot(afcon, aes(regime_type)) + geom_bar() #ordinal 0-3
+ggplot(afcon, aes(regime_type_amb_factor)) + geom_bar() #ordinal 0-9
+ggplot(afcon, aes(regime_changed)) + geom_density() #ordinal -9 to 9; somewhat parabolic -- maybe use squared term?
+ggplot(afcon, aes(gdp_growth)) + geom_density() #numeric; normally distributed around 0
+ggplot(afcon, aes(gdp_percap)) + geom_density() #numeric; right skew -- maybe log transform?
+ggplot(afcon, aes(resource_inequality)) + geom_density() #numeric and bounded between 0 and 1; parabolic
+ggplot(afcon, aes(power_inequality)) + geom_density() #numeric and bounded between 0 and 1; parabolic
+ggplot(afcon, aes(political_power_distribution)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(natural_resource_wealth)) + geom_density() #numeric; right skew -- maybe log transform
+ggplot(afcon, aes(coup)) + geom_bar() #factor
+ggplot(afcon, aes(political_rights)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(personal_rights)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(physical_integrity)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(winning_coalition)) + geom_density() #numeric; disparate
+ggplot(afcon, aes(clientelism)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(presidentialism)) + geom_density() #numeric and bounded between 0 and 1; disparate
+ggplot(afcon, aes(population)) + geom_density() #numeric; right skew -- maybe log transform
+ggplot(afcon, aes(male1529)) + geom_density() #numeric; somewhat normally distributed
+ggplot(afcon, aes(oil)) + geom_density() #numeric; somewhat normally distributed
+
+afcon$population.log <- log(afcon$population)
+
+#Central Variables
+ggplot(afcon, aes(x = regime_type_amb, y = peace)) + geom_count() + labs(x = 'Regime Type', y = 'Peace')
+ggplot(afcon, aes(x = regime_type, y = severity)) + geom_count()
+ggplot(afcon, aes(x = regime_type, y = peace)) + geom_count()
+
+
+#Interactions with responses
+
+#Peace - Categorical
+ggplot(afcon, aes(x = regime_type, y = peace)) + geom_count()
+ggplot(afcon, aes(x = regime_type_amb_factor, y = peace)) + geom_count() #correlation between democracy and peace
+ggplot(afcon, aes(x = regime_changed, y = peace)) + geom_count() #more democratization during peacetime, autocratizåtion during non-peacetime
+ggplot(afcon, aes(x = coup, y = peace)) + geom_count() #more peace, fewer coup attempts, but not significant at all
+
+#Peace - Quantitative
+# ggplot(afcon, aes(x = gdp_growth, y = peace)) + geom_boxplot()
+# ggplot(afcon, aes(x = gdp_percap, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = resource_inequality, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = power_inequality, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = clientelism, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = presidentialism, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = population, y = peace)) + geom_boxplot()
+ggplot(afcon, aes(x = male1529, y = peace)) + geom_boxplot()
+
+
+#Severity - Categorical
+ggplot(afcon, aes(x = regime_type_factor, y = severity)) + geom_count() #more democratic regimes have lower severity levels
+ggplot(afcon, aes(x = regime_type_amb_factor, y = severity)) + geom_count() #less severity among more democratic regimes
+ggplot(afcon, aes(x = regime_changed, y = severity)) + geom_count() #more regime stability at lower severity levels; severity = 1 sees more autocratization
+ggplot(afcon, aes(x = coup, y = severity)) + geom_count() #insignificant
+
+#Severity - Quantitative
+ggplot(afcon, aes(x = gdp_growth, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = gdp_percap, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = resource_inequality, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = power_inequality, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = clientelism, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = presidentialism, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = population, y = severity)) + geom_boxplot(aes(group=severity))
+ggplot(afcon, aes(x = male1529, y = severity)) + geom_boxplot(aes(group=severity))
+
+
+#Duration - Categorical
+ggplot(afcon, aes(x = regime_type_factor, y = duration)) + geom_boxplot() #longer conflicts in lower regime types
+ggplot(afcon, aes(x = regime_type_amb_factor, y = duration)) + geom_boxplot() #ditto
+ggplot(afcon, aes(x = coup, y = duration)) + geom_boxplot(aes(group=coup)) #insignificant
+
+#Duration - Quantitative
+ggplot(afcon, aes(x = regime_changed, y = duration)) + geom_jitter() #unimodal around 0, seems normal
+ggplot(afcon, aes(x = gdp_growth, y = duration)) + geom_jitter() #clustered around 0
+ggplot(afcon, aes(x = gdp_percap, y = duration)) + geom_jitter() #right skew -- log
+ggplot(afcon, aes(x = resource_inequality, y = duration)) + geom_jitter()
+ggplot(afcon, aes(x = power_inequality, y = duration)) + geom_jitter() #parabolic
+ggplot(afcon, aes(x = clientelism, y = duration)) + geom_jitter()
+ggplot(afcon, aes(x = presidentialism, y = duration)) + geom_jitter()
+ggplot(afcon, aes(x = population, y = duration)) + geom_jitter()
+ggplot(afcon, aes(x = population.log, y = duration)) + geom_jitter()
+ggplot(afcon, aes(x = male1529, y = duration)) + geom_jitter()
+
+
+#Severity - Categorical
+ggplot(afcon, aes(x = regime_type_factor, y = relapse)) + geom_count() #no relapse more likely among autocracies
+ggplot(afcon, aes(x = regime_type_amb_factor, y = relapse)) + geom_count() #ditto
+ggplot(afcon, aes(x = regime_changed, y = relapse)) + geom_count() #more relapse more likely where democratization occurred
+ggplot(afcon, aes(x = coup, y = relapse)) + geom_count() #insignificant
+
+#relapse - Quantitative
+ggplot(afcon, aes(x = gdp_growth, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = gdp_percap, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = resource_inequality, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = power_inequality, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = clientelism, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = presidentialism, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = population, y = relapse)) + geom_boxplot(aes(group=relapse))
+ggplot(afcon, aes(x = male1529, y = relapse)) + geom_boxplot(aes(group=relapse))
+
+
+```
+
+# Models
+
+## Conflict as a function of regime type
+
+```{r}
+#conflict.onset <- glm(peace ~ regime_type + regime_changed + gdp_growth + gdp_percap + resource_inequality + power_inequality + natural_resource_wealth + state_revenue_source + coup + political_rights + personal_rights + physical_integrity + cpi + territory_control + regime_interregnum + clientelism + presidentialism + multiparty_elections + elections_number + election_credibility + elite_intervention + FDI + GINI + PCE + trade + population + male1529 + irrelevant + powerless + dominant + junior.partner + senior.partner + discriminated + monopoly + state.collapse + self.exclusion + ethnic_groups, family=binomial)
+#summary(conflict.onset)
+
+```
+
+### Conflict Presence
+
+```{r}
+#Simple model
+m1s <- glm(peace ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year, family=binomial)
+summary(m1s) #ethnic groups, GDP measures, PCE have too many NAs therefore excluded
+plot(m1s)
+glm.diag.plots(m1s, glmdiag = glm.diag(m1s), subset = NULL,
+               iden = FALSE, labels = NULL, ret = FALSE)
+
+#Complex model
+m1c <- glm(peace ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year, family=binomial)
+summary(m1c) #ethnic groups, GDP measures, PCE have too many NAs therefore excluded
+#plot(m1c)
+#glm.diag.plots(m1c, glmdiag = glm.diag(m1c), subset = NULL, iden = FALSE, labels = NULL, ret = FALSE)
+
+m1f <- glm(peace ~ regime_type_factor + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year, family=binomial)
+summary(m1f) #ethnic groups, GDP measures, PCE have too many NAs therefore excluded
+
+
+#With GDP
+m1gdp <- glm(peace ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + gdp_growth + gdp_percap + year, family=binomial)
+summary(m1gdp)
+
+#With PCE
+m1pce <- glm(peace ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + PCE + year, family=binomial)
+summary(m1pce)
+
+#With Oil
+m1oil <- glm(peace ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + oil + year, family=binomial)
+summary(m1oil)
+
+# FULL
+m1full <- glm(peace ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + oil + gdp_growth + gdp_percap, family=binomial)
+summary(m1full)
+
+```
+
+*Simple Model*
+_Positive, significant associations: more variable, more peace_
+* Regime_type
+* Resource_inequality
+* Power_inequality (minimal)
+* Clientelism
+* Male1529
+
+_Negative, significant associations: more variable, less peace (more conflict)_
+* Presidentialism
+* Coup
+* Population
+* Year (over time more conflict)
+
+
+_LINES_
+* Clear patterns in RVF and RVL plots
+* Very skewed Q-Q plot
+* Scale location makes crosses
+* Majority of points are in lower-left quadrant of Cook's Stat vs. leverage plot; most cases are below the Cook's distance line
+
+= Proceed with caution, but generally acceptable?
+
+*Complex Model* -- largely the same as above...
+_Positive, significant associations: more variable, more peace_
+* Regime_type
+* Resource_inequality^2
+* Power_inequality
+* Clientelism
+* Male1529
+
+_Negative, significant associations: more variable, less peace (more conflict)_
+* Presidentialism
+* Coup
+* Population
+* Year
+
+*GDP Model*
+* Similar results to complex model -- complex is better
+
+*LINES*
+* Clear patterns in RVF and RVL plots
+* Very skewed Q-Q plot
+* Scale location makes crosses
+* Majority of points are in lower-left quadrant of Cook's Stat vs. leverage plot; most cases are below the Cook's distance line
+
+*Multicolinearity*
+* All values are above 1, so there might be multicolinearity
+
+= Proceed with caution, but generally acceptable -- complex model is better
+
+
+### Conflict Severity
+
+```{r}
+#Simple Model
+m2s <- polr(as.factor(severity) ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess = TRUE) #had to exclude population
+summary(m2s)
+
+#Complex model
+#Continuous regime type
+m2c <- polr(as.factor(severity) ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess = TRUE)
+summary(m2c)
+coeftest(m2c)
+
+#Factor Regime Type
+m2f <- polr(as.factor(severity) ~ regime_type_factor + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess = TRUE)
+summary(m2f)
+coeftest(m2f)
+
+#COEF test in https://stat.ethz.ch/pipermail/r-help/2013-October/361831.html
+
+#PCE Model
+m2PCE <- polr(as.factor(severity) ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year + PCE, Hess = TRUE)
+summary(m2PCE)
+coeftest(m2PCE)
+
+#GDP Model
+m2gdp <- polr(as.factor(severity) ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year + gdp_growth + gdp_percap, Hess = TRUE)
+summary(m2gdp)
+coeftest(m2gdp)
+
+#Full Model
+m2full <- polr(severity ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population male1529 + year + oil + gdp_growth + gdp_percap, Hess = TRUE)
+summary(m2full)
+coeftest(m2full)
+
+
+```
+*Simple Model*
+* None are significant
+
+*Complex model*
+* None are significant
+
+*GDP Model*
+* None are significant
+
+
+### Conflict Duration
+
+```{r}
+#Simple Model
+m3s <- lm(duration ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year)
+summary(m3s)
+plot(m3s)
+
+#Complex Model
+#Continuous Regime Type
+m3c <- lm(duration ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year)
+summary(m3c)
+#plot(m3c)
+#vif(lm(duration ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year))
+
+#Factor Regime Type
+m3f <- lm(duration ~ regime_type_factor + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year)
+summary(m3f)
+
+#PCE Model
+m3pce <- lm(duration ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + PCE)
+summary(m3pce)
+
+#GDP Model
+m3gdp <- lm(duration ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + gdp_growth + gdp_percap)
+summary(m3gdp)
+
+#Full Model
+m3full <- lm(duration ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + PCE + gdp_growth + gdp_percap)
+summary(m3full)
+
+```
+*Simple Model*
+_Positive, significant associations: more variable, more duration_
+* Presidentialism
+* Population
+* Year
+
+_Negative, significant associations: more variable, less duration_
+* Regime_type
+* Resource_inequality
+* Power_inequality (minimal)
+* Clientelism
+* Male1529
+
+*Complex Model*
+_Positive, significant associations: more variable, more duration_
+* Presidentialism
+* Population
+* Year
+
+_Negative, significant associations: more variable, less duration_
+* Regime_type
+* Resource_inequality^2
+* Power_inequality
+* Clientelism
+* Male1529
+
+
+*GDP Model*
+* Not much better
+
+*LINES*
+* Not great in simple and complex models...
+
+*Multicolinearity*
+* VIFs are between 1 and 2.3
+
+= Use complex model... although it breaches LINES assumptions
+
+
+### Conflict Relapse
+
+```{r}
+#Simple Model
+m4s <- polr(as.factor(relapse) ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess=TRUE) #remove population
+summary(m4s)
+
+#Complex Model
+#Continuous Regime Type
+m4c <- polr(as.factor(relapse) ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess=TRUE)
+summary(m4c)
+coeftest(m4c)
+
+#Factor Regime Type
+m4f <- polr(as.factor(relapse) ~ regime_type_factor + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year, Hess=TRUE)
+summary(m4f)
+coeftest(m4f)
+
+#PCE Model
+m4pce <- polr(as.factor(relapse) ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year + PCE, Hess=TRUE)
+summary(m4pce)
+coeftest(m4pce)
+
+#GDP Model
+m4gdp <- polr(relapse ~ regime_type + regime_changed + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + male1529 + year + gdp_growth + gdp_percap, Hess=TRUE)
+summary(m4gdp)
+coeftest(m4gdp)
+
+#Full Model
+m4full <- polr(as.factor(relapse) ~ regime_type + regime_changed + resource_inequality + power_inequality + clientelism + presidentialism + coup + + male1529 + year + PCE + gdp_growth + gdp_percap, Hess=TRUE)
+summary(m4full)
+coeftest(m4full)
+
+```
+
+*Simple Model*
+_Positive, significant associations: more variable, more relapse_
+* None are significant
+
+_Negative, significant associations: more variable, less relapse_
+* None are significant
+
+*Complex Model*
+_Positive, significant associations: more variable, more relapse_
+* None are significant
+
+_Negative, significant associations: more variable, less relapse_
+* None are significant
+
+*GDP Model*
+* Can't run with POLR
+
+*LINES*
+* No plots?
+
+*Multicolinearity*
+* 
+
+= 
+
+
+## Regime change as a function of conflict
+
+```{r}
+#Simple Model
+
+m5s <- lm(regime_will_change ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year) #remember to code for incompatibility
+summary(m5s)
+plot(m5s)
+
+#Complex Model
+m5c <- lm(regime_will_change ~ peace + severity + duration + relapse + I(resource_inequality^2) + I(power_inequality^2) + clientelism + presidentialism + coup + population + male1529 + year) #remember to code for incompatibility
+summary(m5c)
+#plot(m5c)
+
+
+#PCE Model
+m5pce <- lm(regime_will_change ~ peace + severity + duration + relapse + I(resource_inequality^2) + I(power_inequality^2) + clientelism + presidentialism + coup + population + male1529 + year + PCE) #remember to code for incompatibility
+summary(m5pce)
+
+#GDP Model
+m5gdp <- lm(regime_will_change ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + gdp_growth + gdp_percap) #remember to code for incompatibility
+summary(m5gdp)
+
+#Full Model
+m5full <- lm(regime_will_change ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + PCE + gdp_growth + gdp_percap) #remember to code for incompatibility
+summary(m5full)
+```
+## Regime type as a function of conflict
+
+```{r}
+#Simple Model
+
+m6s <- lm(regime_type_amb ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year) #remember to code for incompatibility
+summary(m6s)
+plot(m6s)
+
+#Complex Model
+m6c <- lm(regime_type_amb ~ peace + severity + duration + relapse + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year) #remember to code for incompatibility
+summary(m6c)
+plot(m6c)
+
+#PCE Model
+m6pce <- lm(regime_type_amb ~ peace + severity + duration + relapse + I(resource_inequality^2) + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + PCE) #remember to code for incompatibility
+summary(m6pce)
+
+#GDP Model
+m6gdp <- lm(regime_type ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + gdp_growth + gdp_percap) #remember to code for incompatibility
+summary(m6gdp)
+
+#Full Model
+m6full <- lm(regime_type ~ peace + severity + duration + relapse + resource_inequality + power_inequality + clientelism + presidentialism + coup + population + male1529 + year + PCE + gdp_growth + gdp_percap) #remember to code for incompatibility
+summary(m6full)
+
+
+```
+
+*Simple Model*
+_Positive, significant associations: more variable, more regime change_
+* Only power_inequality is significant
+
+_Negative, significant associations: more variable, less regime change_
+* Only coup is significant
+
+*Complex Model*
+_Positive, significant associations: more variable, more regime change_
+* Only power_inequality is significant
+
+_Negative, significant associations: more variable, less regime change_
+* Only coup is significant
+
+*GDP Model*
+* Not any better
+
+*LINES*
+* Pretty bad for both
+
+*Multicolinearity*
+* 
+
+= Simple model is better
+
+
+
+# Presentation Plots and Tables
+
+```{r}
+#tables
+stargazer(individualmod, democracymod, econmod, militarymod, fullmodel,
+          title = "Regression Models",
+          type = "text",
+          dep.var.caption   = "Focused Models",
+          dep.var.labels   = "Willingness to Fight",
+          column.labels = c("Individual", "Democracy", "Economy", "Military", "Comprehensive"),
+          covariate.labels = c("Age", "Sex: Male", "Education", "Employment: Other", "Employment: Part-Time", "Employment: Retired", "Employment: Self-Employed", "Employment: Stay-at-Home", "Employment: Student", "Employment: Unemployed", "Devoutness", "Happiness", "Political Conservativeness", "Year", "Population", "GDP Growth", "GDP per Capita", "Gini", "Global South", "Freedom", "Peace", "Independence", "% Labor Force in Army", "Army Size", "Military Expenditures", "No Conscription", "Selective Conscription", "Universal Conscription"),
+          model.names = FALSE,
+          align = TRUE,
+          digits = 2,
+          out = "Regression Table")
+
+
+#ongoing = glm
+#severity = polr
+visreg(conflict.duration.complex) #duration = lm
+#relapse = polr
+visreg(regime.change) #regime change = lm
+
+
+#Effects Plots
+
+plot_model(m1c, type = "pred", terms = "regime_type")
+plot_model(m1f, type = "pred", terms = "regime_type_factor")
+plot_model(m2c, type = "pred", terms = "regime_type")
+plot_model(m2f, type = "pred", terms = "regime_type_factor")
+plot_model(m3c, type = "pred", terms = "regime_type")
+plot_model(m3f, type = "pred", terms = "regime_type_factor")
+plot_model(m4c, type = "pred", terms = "regime_type")
+plot_model(m4f, type = "pred", terms = "regime_type_factor")
+
+
+plot_model(m5c, type = "pred", terms = "peace")
+plot_model(m5c, type = "pred", terms = "severity")
+plot_model(m5c, type = "pred", terms = "duration")
+plot_model(m5c, type = "pred", terms = "relapse")
+plot_model(m6c, type = "pred", terms = "peace")
+plot_model(m6c, type = "pred", terms = "severity")
+plot_model(m6c, type = "pred", terms = "duration")
+plot_model(m6c, type = "pred", terms = "relapse")
+
+
+```
